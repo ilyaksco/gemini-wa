@@ -4,12 +4,18 @@ import (
 	"log"
 	"os"
 	"strings"
+	"strconv"
 
 	"github.com/joho/godotenv"
 )
 
 type Config struct {
 	GeminiAPIKeys []string
+	KnowledgeEnabled bool
+	KnowledgeFile    string
+	StoreLatitude    float64
+	StoreLongitude   float64
+	MenuImagePath    string
 }
 
 func Load() *Config {
@@ -30,7 +36,19 @@ func Load() *Config {
 
 	log.Printf("Loaded %d Gemini API keys", len(apiKeys))
 
+	knowledgeEnabled := os.Getenv("KNOWLEDGE_ENABLED") == "true"
+	knowledgeFile := os.Getenv("KNOWLEDGE_FILE")
+
+	lat, _ := strconv.ParseFloat(os.Getenv("STORE_LATITUDE"), 64)
+	lon, _ := strconv.ParseFloat(os.Getenv("STORE_LONGITUDE"), 64)
+	menuPath := os.Getenv("MENU_IMAGE_PATH")
+
 	return &Config{
 		GeminiAPIKeys: apiKeys,
+		KnowledgeEnabled: knowledgeEnabled,
+		KnowledgeFile:    knowledgeFile,
+		StoreLatitude:    lat,
+		StoreLongitude:   lon,
+		MenuImagePath:    menuPath,
 	}
 }

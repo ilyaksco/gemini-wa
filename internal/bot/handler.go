@@ -2,9 +2,13 @@ package bot
 
 import (
 	"context"
+	"fmt"
 	"gemini-whatsapp-bot/internal/db"
+	"gemini-whatsapp-bot/internal/knowledge"
 	geminiClient "gemini-whatsapp-bot/pkg/gemini"
 	"log"
+	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -21,6 +25,11 @@ type BotHandler struct {
 	DB     *db.Database
 	Bundle *goi18n.Bundle
 	Gemini *geminiClient.Client
+	Knowledge        *knowledge.Knowledge
+	KnowledgeEnabled bool
+	StoreLatitude    float64
+	StoreLongitude   float64
+	MenuImagePath    string
 }
 
 func (h *BotHandler) EventHandler(evt interface{}) {
@@ -40,6 +49,15 @@ func (h *BotHandler) handleMessage(msg *events.Message) {
 		return
 	}
 
+	userLang := h.DB.GetUserLang(senderJID)
+	localizer := goi18n.NewLocalizer(h.Bundle, userLang)
+	chatJID := msg.Info.Chat
+
+	if img := msg.Message.GetImageMessage(); img != nil {
+		h.handleImageMessage(img, chatJID, senderJID, localizer)
+		return
+	}
+
 	var text string
 	if msg.Message.GetConversation() != "" {
 		text = msg.Message.GetConversation()
@@ -53,18 +71,122 @@ func (h *BotHandler) handleMessage(msg *events.Message) {
 	}
 
 	log.Printf("Received valid text message from %s: %s", senderJID, text)
-
-	userLang := h.DB.GetUserLang(senderJID)
-	localizer := goi18n.NewLocalizer(h.Bundle, userLang)
-	
 	cleanedText := strings.TrimSpace(text)
 
 	if strings.HasPrefix(cleanedText, "/lang") {
 		h.handleLangCommand(cleanedText, senderJID, localizer)
 	} else if cleanedText == "/reset" || cleanedText == "/newchat" {
-		h.handleResetCommand(senderJID, msg.Info.Chat)
+		h.handleResetCommand(senderJID, chatJID)
 	} else {
-		h.handleGeminiQuery(cleanedText, msg.Info.Chat, senderJID, localizer)
+		h.handleGeminiQuery(cleanedText, chatJID, senderJID, localizer)
+	}
+}
+
+func (h *BotHandler) handleImageMessage(img *proto.ImageMessage, chatJID types.JID, senderJID string, localizer *goi18n.Localizer) {
+    log.Printf("Processing image message from %s", senderJID)
+    h.Client.SendChatPresence(chatJID, types.ChatPresenceComposing, types.ChatPresenceMediaText)
+    defer h.Client.SendChatPresence(chatJID, types.ChatPresencePaused, types.ChatPresenceMediaText)
+
+    imageData, err := h.Client.Download(context.Background(), img)
+    if err != nil {
+        log.Printf("Failed to download image from %s: %v", senderJID, err)
+        return
+    }
+
+    userCaption := img.GetCaption()
+    if userCaption == "" {
+        userCaption = "Tolong jelaskan apa yang ada di dalam gambar ini."
+    }
+
+    imageAnalysisInstruction := "Anda adalah asisten AI yang bisa menganalisis gambar. Jelaskan isi gambar yang dikirim oleh pengguna secara detail."
+
+    finalPrompt := userCaption
+    if h.KnowledgeEnabled && h.Knowledge.Content != "" {
+        finalPrompt = fmt.Sprintf("Main Instruction:\n%s\n\nGeneral Personality:\n\"\"\"\n%s\n\"\"\"\n\nUser's Question about the image:\n%s", imageAnalysisInstruction, h.Knowledge.Content, userCaption)
+    }
+
+    mimeType := img.GetMimetype()
+    response, err := h.Gemini.GenerateContentWithImage(finalPrompt, mimeType, imageData)
+    if err != nil {
+        log.Printf("Error from Gemini Vision API for user %s: %v", senderJID, err)
+        errorMsg, _ := localizer.Localize(&goi18n.LocalizeConfig{MessageID: "error_gemini"})
+        h.sendMessage(chatJID, errorMsg)
+        return
+    }
+
+    log.Printf("Received vision response from Gemini for %s, sending reply", senderJID)
+    h.sendMessage(chatJID, response)
+
+    h.DB.AddMessageToHistory(senderJID, "user", "[User sent an image] "+img.GetCaption())
+    h.DB.AddMessageToHistory(senderJID, "model", response)
+}
+
+
+func (h *BotHandler) sendLocation(recipient types.JID) {
+	if h.StoreLatitude == 0 || h.StoreLongitude == 0 {
+		log.Println("Store location is not configured")
+		h.sendMessage(recipient, "Maaf, lokasi toko belum diatur.")
+		return
+	}
+	
+	lat := h.StoreLatitude
+	lon := h.StoreLongitude
+
+	msg := &proto.Message{
+		LocationMessage: &proto.LocationMessage{
+			DegreesLatitude:  &lat,
+			DegreesLongitude: &lon,
+		},
+	}
+	
+	_, err := h.Client.SendMessage(context.Background(), recipient, msg)
+	if err != nil {
+		log.Printf("Failed to send location to %s: %v", recipient, err)
+	} else {
+		log.Printf("Sent location to %s", recipient)
+	}
+}
+
+func (h *BotHandler) sendImage(recipient types.JID, imagePath, caption string) {
+	if imagePath == "" {
+		log.Println("Image path is not configured")
+		h.sendMessage(recipient, "Maaf, file gambar belum diatur.")
+		return
+	}
+
+	data, err := os.ReadFile(imagePath)
+	if err != nil {
+		log.Printf("Failed to read image file %s: %v", imagePath, err)
+		h.sendMessage(recipient, "Maaf, terjadi kesalahan saat membaca file gambar.")
+		return
+	}
+
+	uploaded, err := h.Client.Upload(context.Background(), data, whatsmeow.MediaImage)
+	if err != nil {
+		log.Printf("Failed to upload image: %v", err)
+		h.sendMessage(recipient, "Maaf, terjadi kesalahan saat mengunggah gambar.")
+		return
+	}
+
+	mimetype := http.DetectContentType(data)
+	msg := &proto.Message{
+		ImageMessage: &proto.ImageMessage{
+			Caption:       &caption,
+			Mimetype:      &mimetype,
+			URL:           &uploaded.URL,
+			DirectPath:    &uploaded.DirectPath,
+			MediaKey:      uploaded.MediaKey,
+			FileEncSHA256: uploaded.FileEncSHA256,
+			FileSHA256:    uploaded.FileSHA256,
+			FileLength:    &uploaded.FileLength,
+		},
+	}
+
+	_, err = h.Client.SendMessage(context.Background(), recipient, msg)
+	if err != nil {
+		log.Printf("Failed to send image to %s: %v", recipient, err)
+	} else {
+		log.Printf("Sent image to %s", recipient)
 	}
 }
 
@@ -115,41 +237,46 @@ func (h *BotHandler) handleLangCommand(text, senderJID string, localizer *goi18n
 }
 
 func (h *BotHandler) handleGeminiQuery(prompt string, chatJID types.JID, senderJID string, localizer *goi18n.Localizer) {
-	log.Printf("Forwarding message from %s to Gemini with history", senderJID)
-	
-	h.Client.SendChatPresence(chatJID, types.ChatPresenceComposing, types.ChatPresenceMediaText)
-	defer h.Client.SendChatPresence(chatJID, types.ChatPresencePaused, types.ChatPresenceMediaText)
+    log.Printf("Forwarding message from %s to Gemini", senderJID)
 
-	historyFromDB := h.DB.GetConversationHistory(senderJID)
-	var geminiHistory []*genai.Content
+    h.Client.SendChatPresence(chatJID, types.ChatPresenceComposing, types.ChatPresenceMediaText)
+    defer h.Client.SendChatPresence(chatJID, types.ChatPresencePaused, types.ChatPresenceMediaText)
 
-	for _, msg := range historyFromDB {
-		geminiHistory = append(geminiHistory, &genai.Content{
-			Parts: []genai.Part{genai.Text(msg.Message)},
-			Role:  msg.Role,
-		})
-	}
+    historyFromDB := h.DB.GetConversationHistory(senderJID)
+    var geminiHistory []*genai.Content
 
-	geminiHistory = append(geminiHistory, &genai.Content{
-		Parts: []genai.Part{genai.Text(prompt)},
-		Role:  "user",
-	})
+    for _, msg := range historyFromDB {
+        geminiHistory = append(geminiHistory, &genai.Content{
+            Parts: []genai.Part{genai.Text(msg.Message)},
+            Role:  msg.Role,
+        })
+    }
 
+    finalPrompt := prompt
+    if h.KnowledgeEnabled && h.Knowledge.Content != "" {
+        knowledgePrompt := fmt.Sprintf("Use this personality to answer:\n\"\"\"\n%s\n\"\"\"\n\nUser's Question: %s", h.Knowledge.Content, prompt)
+        finalPrompt = knowledgePrompt
+    }
 
-	response, err := h.Gemini.GenerateContent(geminiHistory)
-	if err != nil {
-		log.Printf("Error from Gemini API for user %s: %v", senderJID, err)
-		errorMsg, _ := localizer.Localize(&goi18n.LocalizeConfig{MessageID: "error_gemini"})
-		h.sendMessage(chatJID, errorMsg)
-		return
-	}
+    geminiHistory = append(geminiHistory, &genai.Content{
+        Parts: []genai.Part{genai.Text(finalPrompt)},
+        Role:  "user",
+    })
 
-	log.Printf("Received response from Gemini for %s, sending reply", senderJID)
-	h.sendMessage(chatJID, response)
+    response, err := h.Gemini.GenerateContent(geminiHistory)
+    if err != nil {
+        log.Printf("Error from Gemini API for user %s: %v", senderJID, err)
+        errorMsg, _ := localizer.Localize(&goi18n.LocalizeConfig{MessageID: "error_gemini"})
+        h.sendMessage(chatJID, errorMsg)
+        return
+    }
 
-	h.DB.AddMessageToHistory(senderJID, "user", prompt)
-	h.DB.AddMessageToHistory(senderJID, "model", response)
+    log.Printf("Received response from Gemini for %s", senderJID)
+    h.sendMessage(chatJID, response)
+    h.DB.AddMessageToHistory(senderJID, "user", prompt)
+    h.DB.AddMessageToHistory(senderJID, "model", response)
 }
+
 
 func (h *BotHandler) sendMessage(recipient types.JID, message string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

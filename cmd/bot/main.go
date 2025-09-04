@@ -6,6 +6,7 @@ import (
 	"gemini-whatsapp-bot/internal/config"
 	"gemini-whatsapp-bot/internal/db"
 	"gemini-whatsapp-bot/internal/i18n"
+	"gemini-whatsapp-bot/internal/knowledge"
 	geminiClient "gemini-whatsapp-bot/pkg/gemini"
 	"log"
 	"os"
@@ -28,6 +29,8 @@ func main() {
 	db.InitSchema()
 	bundle := i18n.NewBundle()
 	gemini := geminiClient.New(cfg.GeminiAPIKeys)
+	knowledge := knowledge.Load(cfg.KnowledgeFile)
+
 
 	dbLog := waLog.Stdout("Database", "INFO", true)
 	container, err := sqlstore.New(context.Background(), "sqlite3", "file:bot_device.db?_foreign_keys=on", dbLog)
@@ -47,6 +50,11 @@ func main() {
 		DB:     db,
 		Bundle: bundle,
 		Gemini: gemini,
+		Knowledge:        knowledge,
+		KnowledgeEnabled: cfg.KnowledgeEnabled,
+		StoreLatitude:    cfg.StoreLatitude,
+		StoreLongitude:   cfg.StoreLongitude,
+		MenuImagePath:    cfg.MenuImagePath,
 	}
 	client.AddEventHandler(handler.EventHandler)
 
