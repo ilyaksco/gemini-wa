@@ -31,10 +31,14 @@ func (c *Client) GenerateContent(history []*genai.Content) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if len(history) == 0 {
+		return "", errors.New("empty history")
+	}
+
 	totalKeys := len(c.keys)
 	for i := 0; i < totalKeys; i++ {
 		key := c.keys[c.currentKeyIndex]
-		
+
 		ctx := context.Background()
 		client, err := genai.NewClient(ctx, option.WithAPIKey(key))
 		if err != nil {
@@ -45,8 +49,10 @@ func (c *Client) GenerateContent(history []*genai.Content) (string, error) {
 
 		model := client.GenerativeModel("gemini-1.5-flash")
 		cs := model.StartChat()
-		cs.History = history[0 : len(history)-1]
-		
+		if len(history) > 1 {
+			cs.History = history[0 : len(history)-1]
+		}
+
 		lastPrompt := history[len(history)-1].Parts[0]
 		resp, err := cs.SendMessage(ctx, lastPrompt)
 		client.Close()
@@ -63,7 +69,7 @@ func (c *Client) GenerateContent(history []*genai.Content) (string, error) {
 		if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
 			return "No response from model.", nil
 		}
-		
+
 		return string(resp.Candidates[0].Content.Parts[0].(genai.Text)), nil
 	}
 
