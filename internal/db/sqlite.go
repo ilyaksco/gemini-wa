@@ -14,6 +14,8 @@ type Database struct {
 type HistoryMessage struct {
 	Role    string
 	Message string
+	UserName string
+
 }
 
 func New(dbPath string) *Database {
@@ -42,6 +44,7 @@ func (db *Database) InitSchema() {
         jid TEXT NOT NULL,
         role TEXT NOT NULL,
         message TEXT NOT NULL,
+        user_name TEXT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     );`
 
@@ -56,31 +59,19 @@ func (db *Database) InitSchema() {
 	log.Println("Database schema initialized")
 }
 
-func (db *Database) AddMessageToHistory(jid, role, message string) {
-	insertQuery := `INSERT INTO conversation_history (jid, role, message) VALUES (?, ?, ?)`
-	_, err := db.Exec(insertQuery, jid, role, message)
+func (db *Database) AddMessageToHistory(jid, role, message, userName string) {
+	insertQuery := `INSERT INTO conversation_history (jid, role, message, user_name) VALUES (?, ?, ?, ?)`
+	_, err := db.Exec(insertQuery, jid, role, message, userName)
 	if err != nil {
 		log.Printf("Failed to add message to history for %s: %v", jid, err)
 		return
-	}
-
-	pruneQuery := `
-    DELETE FROM conversation_history WHERE id IN (
-        SELECT id FROM conversation_history
-        WHERE jid = ?
-        ORDER BY timestamp DESC
-        LIMIT -1 OFFSET 20
-    )`
-	_, err = db.Exec(pruneQuery, jid)
-	if err != nil {
-		log.Printf("Failed to prune conversation history for %s: %v", jid, err)
 	}
 }
 
 func (db *Database) GetConversationHistory(jid string) []HistoryMessage {
     query := `
-    SELECT role, message FROM (
-        SELECT role, message, timestamp FROM conversation_history
+    SELECT role, message, user_name FROM (
+        SELECT role, message, user_name, timestamp FROM conversation_history
         WHERE jid = ?
         ORDER BY timestamp DESC
         LIMIT 20
@@ -96,10 +87,12 @@ func (db *Database) GetConversationHistory(jid string) []HistoryMessage {
     var history []HistoryMessage
     for rows.Next() {
         var h HistoryMessage
-        if err := rows.Scan(&h.Role, &h.Message); err != nil {
+        var userName sql.NullString
+        if err := rows.Scan(&h.Role, &h.Message, &userName); err != nil {
             log.Printf("Failed to scan history row for %s: %v", jid, err)
             continue
         }
+        h.UserName = userName.String
         history = append(history, h)
     }
     return history

@@ -47,7 +47,7 @@ func (c *Client) GenerateContent(history []*genai.Content) (string, error) {
 			continue
 		}
 
-		model := client.GenerativeModel("gemini-2.5-flash")
+		model := client.GenerativeModel("gemini-2.5-flash-lite")
 		cs := model.StartChat()
 		if len(history) > 1 {
 			cs.History = history[0 : len(history)-1]
