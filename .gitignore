@@ -1,0 +1,9 @@
+# File konfigurasi sensitif
+.env
+
+# File database sesi dan pengguna
+*.db
+
+# File yang dihasilkan oleh sistem operasi
+.DS_Store
+Thumbs.db

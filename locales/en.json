@@ -1,0 +1,22 @@
+[
+    {
+        "id": "welcome",
+        "translation": "Hello! I am a Gemini-powered bot. Send me any message!"
+    },
+    {
+        "id": "lang_updated",
+        "translation": "Language has been updated to English."
+    },
+    {
+        "id": "lang_not_found",
+        "translation": "Language '{{.Lang}}' is not supported."
+    },
+    {
+        "id": "processing",
+        "translation": "🧠 Processing your request..."
+    },
+    {
+        "id": "error_gemini",
+        "translation": "⚠️ Sorry, I encountered an error while processing your request to Gemini."
+    }
+]

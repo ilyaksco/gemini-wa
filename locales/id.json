@@ -1,0 +1,22 @@
+[
+    {
+        "id": "welcome",
+        "translation": "Halo! Saya adalah bot yang didukung oleh Gemini. Kirimkan saya pesan apa saja!"
+    },
+    {
+        "id": "lang_updated",
+        "translation": "Bahasa telah diubah ke Indonesia."
+    },
+    {
+        "id": "lang_not_found",
+        "translation": "Bahasa '{{.Lang}}' tidak didukung."
+    },
+    {
+        "id": "processing",
+        "translation": "🧠 Sedang memproses permintaan Anda..."
+    },
+    {
+        "id": "error_gemini",
+        "translation": "⚠️ Maaf, terjadi kesalahan saat memproses permintaan Anda ke Gemini."
+    }
+]
