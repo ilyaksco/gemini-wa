@@ -92,7 +92,7 @@ func (c *Client) GenerateContentWithImage(prompt string, mimeType string, imageD
 			continue
 		}
 
-		model := client.GenerativeModel("gemini-1.5-flash")
+		model := client.GenerativeModel("gemini-2.5-flash")
 		content := []genai.Part{
 			genai.ImageData(mimeType, imageData),
 			genai.Text(prompt),
