@@ -9,6 +9,8 @@
     pkgs.nodejs_20
     pkgs.nodePackages.nodemon
     pkgs.gccgo
+    pkgs.python312Full
+    pkgs.python311Packages.pip
   ];
   # Sets environment variables in the workspace
   env = {};

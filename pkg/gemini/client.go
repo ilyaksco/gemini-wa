@@ -47,7 +47,7 @@ func (c *Client) GenerateContent(history []*genai.Content) (string, error) {
 			continue
 		}
 
-		model := client.GenerativeModel("gemini-2.5-flash-lite")
+		model := client.GenerativeModel("gemini-2.5-flash")
 		cs := model.StartChat()
 		if len(history) > 1 {
 			cs.History = history[0 : len(history)-1]
@@ -120,6 +120,50 @@ func (c *Client) GenerateContentWithImage(prompt string, mimeType string, imageD
 	return "", errors.New("all Gemini API keys are rate-limited or invalid")
 }
 
+func (c *Client) GenerateContentWithDocument(prompt string, mimeType string, documentData []byte) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	totalKeys := len(c.keys)
+	for i := 0; i < totalKeys; i++ {
+		key := c.keys[c.currentKeyIndex]
+
+		ctx := context.Background()
+		client, err := genai.NewClient(ctx, option.WithAPIKey(key))
+		if err != nil {
+			log.Printf("Failed to create Gemini client with key index %d: %v", c.currentKeyIndex, err)
+			c.rotateToNextKey()
+			continue
+		}
+
+		model := client.GenerativeModel("gemini-2.5-flash")
+		pdfPart := genai.Blob{
+			MIMEType: mimeType,
+			Data:     documentData,
+		}
+		promptPart := genai.Text(prompt)
+
+		resp, err := model.GenerateContent(ctx, pdfPart, promptPart)
+		client.Close()
+
+		if err != nil {
+			if strings.Contains(err.Error(), "RESOURCE_EXHAUSTED") || strings.Contains(err.Error(), "429") {
+				log.Printf("API key at index %d is rate-limited. Rotating to next key.", c.currentKeyIndex)
+				c.rotateToNextKey()
+				continue
+			}
+			return "", err
+		}
+
+		if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
+			return "No response from model.", nil
+		}
+
+		return string(resp.Candidates[0].Content.Parts[0].(genai.Text)), nil
+	}
+
+	return "", errors.New("all Gemini API keys are rate-limited or invalid")
+}
 
 func (c *Client) rotateToNextKey() {
 	totalKeys := len(c.keys)

@@ -55,17 +55,20 @@ func (h *BotHandler) handleMessage(msg *events.Message) {
 	chatJID := msg.Info.Chat
 	isGroup := msg.Info.IsGroup
 
-	// --- PERUBAHAN DIMULAI DI SINI ---
 	var historyJID string
 	if isGroup {
-		historyJID = chatJID.String() // Gunakan ID Grup untuk riwayat
+		historyJID = chatJID.String()
 	} else {
-		historyJID = senderJID // Gunakan ID Pengguna untuk riwayat
+		historyJID = senderJID
 	}
-	// --- PERUBAHAN SELESAI ---
 
 	if img := msg.Message.GetImageMessage(); img != nil {
-		h.handleImageMessage(img, chatJID, senderJID, localizer)
+		h.handleImageMessage(img, chatJID, senderJID, historyJID, isGroup, localizer)
+		return
+	}
+
+	if doc := msg.Message.GetDocumentMessage(); doc != nil {
+		h.handleDocumentMessage(doc, chatJID, senderJID, historyJID, isGroup, localizer)
 		return
 	}
 
@@ -88,7 +91,6 @@ func (h *BotHandler) handleMessage(msg *events.Message) {
 		return
 	}
 	if cleanedText == "/reset" || cleanedText == "/newchat" {
-		// Teruskan historyJID yang benar
 		h.handleResetCommand(historyJID, chatJID)
 		return
 	}
@@ -111,15 +113,29 @@ func (h *BotHandler) handleMessage(msg *events.Message) {
 
 	if shouldRespond && prompt != "" {
 		log.Printf("Received valid prompt from %s: %s", senderJID, prompt)
-		// Teruskan historyJID yang benar
 		h.handleGeminiQuery(prompt, chatJID, historyJID, userName, localizer)
 	} else if isGroup {
 		log.Printf("Message in group from %s without trigger, ignoring", senderJID)
 	}
 }
 
-func (h *BotHandler) handleImageMessage(img *proto.ImageMessage, chatJID types.JID, senderJID string, localizer *goi18n.Localizer) {
+func (h *BotHandler) handleImageMessage(img *proto.ImageMessage, chatJID types.JID, senderJID string, historyJID string, isGroup bool, localizer *goi18n.Localizer) {
 	log.Printf("Processing image message from %s", senderJID)
+	
+	userCaption := img.GetCaption()
+
+	if isGroup {
+		if !strings.HasPrefix(userCaption, "/ask") && !strings.HasPrefix(userCaption, "/ai") {
+			log.Printf("Image in group from %s without trigger, ignoring", senderJID)
+			return
+		}
+		if strings.HasPrefix(userCaption, "/ask ") {
+			userCaption = strings.TrimSpace(strings.TrimPrefix(userCaption, "/ask "))
+		} else if strings.HasPrefix(userCaption, "/ai ") {
+			userCaption = strings.TrimSpace(strings.TrimPrefix(userCaption, "/ai "))
+		}
+	}
+	
 	h.Client.SendChatPresence(chatJID, types.ChatPresenceComposing, types.ChatPresenceMediaText)
 	defer h.Client.SendChatPresence(chatJID, types.ChatPresencePaused, types.ChatPresenceMediaText)
 
@@ -129,8 +145,7 @@ func (h *BotHandler) handleImageMessage(img *proto.ImageMessage, chatJID types.J
 		return
 	}
 
-	userCaption := img.GetCaption()
-	userName := "" // Kita tidak punya nama pengguna di konteks ini, jadi kosongkan
+	userName := ""
 	if userCaption == "" {
 		userCaption = "Tolong jelaskan gambar ini dan hubungkan dengan produk yang mungkin Anda jual."
 	}
@@ -142,7 +157,15 @@ func (h *BotHandler) handleImageMessage(img *proto.ImageMessage, chatJID types.J
 		finalPrompt = fmt.Sprintf("Main Instruction:\n%s\n\nGeneral Personality:\n\"\"\"\n%s\n\"\"\"\n\nUser's Question about the image:\n%s", imageAnalysisInstruction, h.Knowledge.Content, userCaption)
 	}
 
-	mimeType := img.GetMimetype()
+	mimeParts := strings.Split(img.GetMimetype(), "/")
+	var mimeType string
+	if len(mimeParts) == 2 {
+		mimeType = mimeParts[1]
+	} else {
+		log.Printf("Unexpected MIME type format: %s", img.GetMimetype())
+		mimeType = "jpeg"
+	}
+
 	response, err := h.Gemini.GenerateContentWithImage(finalPrompt, mimeType, imageData)
 	if err != nil {
 		log.Printf("Error from Gemini Vision API for user %s: %v", senderJID, err)
@@ -154,19 +177,8 @@ func (h *BotHandler) handleImageMessage(img *proto.ImageMessage, chatJID types.J
 	log.Printf("Received vision response from Gemini for %s, sending reply", senderJID)
 	h.sendMessage(chatJID, response)
 
-    // --- PERUBAHAN DI SINI ---
-	// Tambahkan argumen keempat (userName) saat menyimpan riwayat
-	historyJID := chatJID.String() // Asumsi gambar di grup menggunakan ID grup untuk riwayat
-	if !img.GetContextInfo().GetIsForwarded() { // Cek sederhana jika ini bukan dari grup
-		isGroup := false // Logika deteksi grup bisa disempurnakan
-		if !isGroup {
-			historyJID = senderJID
-		}
-	}
-	
 	h.DB.AddMessageToHistory(historyJID, "user", "[User sent an image] "+userCaption, userName)
-	h.DB.AddMessageToHistory(historyJID, "model", response, "") // Argumen keempat adalah string kosong untuk model
-    // --- PERUBAHAN SELESAI ---
+	h.DB.AddMessageToHistory(historyJID, "model", response, "")
 }
 
 
